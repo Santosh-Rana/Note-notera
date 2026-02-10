@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Material You AI Notes</title>
+    
+    <!-- PWA Theme Color -->
+    <meta name="theme-color" content="#FFFBFD">
+
+    <!-- Google Fonts: Roboto for Material Design -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind Configuration for Material You -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Roboto', 'sans-serif'],
+                    },
+                    colors: {
+                        md: {
+                            base: '#FFFBFD',
+                            surface: '#F3EDF7',
+                            surfaceVariant: '#E7E0EC',
+                            primary: '#6750A4',
+                            onPrimary: '#FFFFFF',
+                            primaryContainer: '#EADDFF',
+                            onPrimaryContainer: '#21005D',
+                            secondaryContainer: '#FFD8E4',
+                            onSecondaryContainer: '#31111D',
+                            tertiaryContainer: '#FFD9E3', // For Ideas
+                            outline: '#79747E',
+                            error: '#B3261E'
+                        }
+                    },
+                    borderRadius: {
+                        'md3': '32px',
+                        'md3-sm': '16px'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom Scrollbar for a cleaner look */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #E7E0EC; border-radius: 10px; }
+        
+        body { -webkit-tap-highlight-color: transparent; }
+        
+        /* Smooth transitions */
+        .note-card { transition: all 0.3s cubic-bezier(0.2, 0.0, 0, 1.0); }
+        .note-card:active { transform: scale(0.98); }
+        
+        /* Markdown-like styling for AI response */
+        .ai-content p { margin-bottom: 0.5rem; }
+        .ai-content ul { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 0.5rem; }
+        .ai-content strong { color: #21005D; }
+    </style>
+</head>
+<body class="bg-md-base text-gray-800 h-screen overflow-hidden selection:bg-md-primaryContainer selection:text-md-onPrimaryContainer">
+
+    <div id="root"></div>
+
+    <!-- PWA Logic Script -->
+    <script>
+        // 1. Dynamic Manifest
+        const manifest = {
+            "name": "Material AI Notes",
+            "short_name": "AI Notes",
+            "start_url": ".",
+            "display": "standalone",
+            "background_color": "#FFFBFD",
+            "theme_color": "#FFFBFD",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/2965/2965358.png", // Placeholder icon
+                    "sizes": "512x512",
+                    "type": "image/png"
+                }
+            ]
+        };
+        const stringManifest = JSON.stringify(manifest);
+        const blobManifest = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blobManifest);
+        const link = document.createElement('link');
+        link.rel = 'manifest';
+        link.href = manifestURL;
+        document.head.appendChild(link);
+
+        // 2. Service Worker Registration (Inline Blob)
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                const CACHE_NAME = 'ai-notes-v1';
+                self.addEventListener('install', (e) => {
+                    e.waitUntil(
+                        caches.open(CACHE_NAME).then((cache) => {
+                            return cache.addAll(['./']); 
+                        })
+                    );
+                });
+                self.addEventListener('fetch', (e) => {
+                    e.respondWith(
+                        caches.match(e.request).then((response) => response || fetch(e.request))
+                    );
+                });
+            `;
+            const blobSW = new Blob([swCode], {type: 'application/javascript'});
+            const swURL = URL.createObjectURL(blobSW);
+            navigator.serviceWorker.register(swURL)
+                .then(() => console.log('Service Worker Registered'))
+                .catch(err => console.error('SW Error:', err));
+        }
+    </script>
+
+    <!-- Application Logic -->
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Config ---
+        const API_KEY = "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";
+        // Note: 'google/gemini-2.0-flash-thinking-exp:free' is the current effective reasoning model on OR, 
+        // but using the prompt's requested string.
+        const AI_MODEL = "google/gemini-2.0-flash-thinking-exp:free"; 
+
+        // --- Components ---
+
+        // Helper for Icons
+        const Icon = ({ name, size = 24, className = "" }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            });
+            return <i data-lucide={name} width={size} height={size} class={className}></i>;
+        };
+
+        // Main App Component
+        const App = () => {
+            // State
+            const [notes, setNotes] = useState(() => {
+                const saved = localStorage.getItem('material_ai_notes');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [searchQuery, setSearchQuery] = useState("");
+            const [selectedCategory, setSelectedCategory] = useState("All");
+            const [activeNote, setActiveNote] = useState(null); // If not null, modal is open
+            const [isEditing, setIsEditing] = useState(false); // True if modal is open
+
+            // Effects
+            useEffect(() => {
+                localStorage.setItem('material_ai_notes', JSON.stringify(notes));
+            }, [notes]);
+
+            useEffect(() => {
+                lucide.createIcons();
+            }, [isEditing, notes, activeNote]);
+
+            // CRUD Actions
+            const addNote = () => {
+                const newNote = {
+                    id: Date.now().toString(),
+                    title: "",
+                    content: "",
+                    category: "Personal",
+                    timestamp: Date.now(),
+                    chatHistory: [] 
+                };
+                setActiveNote(newNote);
+                setIsEditing(true);
+            };
+
+            const saveNote = (updatedNote) => {
+                setNotes(prev => {
+                    const exists = prev.find(n => n.id === updatedNote.id);
+                    if (exists) {
+                        return prev.map(n => n.id === updatedNote.id ? updatedNote : n);
+                    }
+                    return [updatedNote, ...prev];
+                });
+            };
+
+            const deleteNote = (id) => {
+                setNotes(prev => prev.filter(n => n.id !== id));
+                if (activeNote && activeNote.id === id) closeEditor();
+            };
+
+            const closeEditor = () => {
+                setIsEditing(false);
+                setTimeout(() => setActiveNote(null), 300); // Wait for animation
+            };
+
+            // Filtering
+            const filteredNotes = notes.filter(note => {
+                const matchesSearch = note.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                      note.content.toLowerCase().includes(searchQuery.toLowerCase());
+                const matchesCat = selectedCategory === "All" || note.category === selectedCategory;
+                return matchesSearch && matchesCat;
+            });
+
+            return (
+                <div className="h-full flex flex-col max-w-2xl mx-auto bg-md-base relative">
+                    
+                    {/* Header */}
+                    <header className="p-4 pt-6 sticky top-0 bg-md-base/95 backdrop-blur z-10">
+                        <div className="flex justify-between items-center mb-4">
+                            <h1 className="text-2xl font-normal text-md-onSecondaryContainer tracking-tight">AI Notes</h1>
+                            <div className="w-10 h-10 rounded-full bg-md-secondaryContainer flex items-center justify-center text-md-onSecondaryContainer font-bold">
+                                You
+                            </div>
+                        </div>
+
+                        {/* Search */}
+                        <div className="relative mb-4 group">
+                            <input 
+                                type="text" 
+                                placeholder="Search your mind..." 
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full h-12 pl-12 pr-4 rounded-full bg-md-surfaceVariant text-md-onSecondaryContainer placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-md-primary transition-all"
+                            />
+                            <div className="absolute left-4 top-3 text-gray-500">
+                                <Icon name="search" size={20} />
+                            </div>
+                        </div>
+
+                        {/* Categories */}
+                        <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                            {["All", "Personal", "Study", "Ideas"].map(cat => (
+                                <button 
+                                    key={cat}
+                                    onClick={() => setSelectedCategory(cat)}
+                                    className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap
+                                        ${selectedCategory === cat 
+                                            ? 'bg-md-primaryContainer text-md-onPrimaryContainer' 
+                                            : 'bg-transparent border border-md-outline/30 text-gray-600 hover:bg-gray-100'}`}
+                                >
+                                    {cat}
+                                </button>
+                            ))}
+                        </div>
+                    </header>
+
+                    {/* Note Grid */}
+                    <main className="flex-1 overflow-y-auto p-4 pb-24 grid grid-cols-1 gap-3 content-start">
+                        {filteredNotes.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 opacity-60">
+                                <Icon name="sticky-note" size={48} className="mb-2" />
+                                <p>No notes found</p>
+                            </div>
+                        ) : (
+                            filteredNotes.map(note => (
+                                <div 
+                                    key={note.id} 
+                                    onClick={() => { setActiveNote(note); setIsEditing(true); }}
+                                    className="note-card bg-md-surface p-5 rounded-md3 cursor-pointer hover:shadow-md border border-transparent hover:border-md-outline/10 relative group"
+                                >
+                                    <div className="flex justify-between items-start mb-2">
+                                        <h3 className="font-bold text-lg text-gray-800 line-clamp-1">{note.title || "Untitled"}</h3>
+                                        <span className={`text-xs px-2 py-1 rounded-md bg-white border border-gray-100`}>
+                                            {note.category}
+                                        </span>
+                                    </div>
+                                    <p className="text-gray-600 text-sm line-clamp-3 mb-3 leading-relaxed">
+                                        {note.content || "No content..."}
+                                    </p>
+                                    <div className="flex justify-between items-end">
+                                        <span className="text-xs text-gray-400">
+                                            {new Date(note.timestamp).toLocaleDateString()}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </main>
+
+                    {/* FAB */}
+                    <button 
+                        onClick={addNote}
+                        className="fixed bottom-6 right-6 w-14 h-14 bg-md-primaryContainer text-md-onPrimaryContainer rounded-2xl shadow-lg hover:shadow-xl transition-all active:scale-90 flex items-center justify-center"
+                    >
+                        <Icon name="plus" size={28} />
+                    </button>
+
+                    {/* Editor Modal */}
+                    {isEditing && activeNote && (
+                        <Editor 
+                            note={activeNote} 
+                            onSave={(n) => { saveNote(n); }} 
+                            onClose={closeEditor}
+                            onDelete={() => deleteNote(activeNote.id)}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        // Editor Component with AI Integration
+        const Editor = ({ note, onSave, onClose, onDelete }) => {
+            const [localNote, setLocalNote] = useState({ ...note });
+            const [isAiOpen, setIsAiOpen] = useState(false);
+            const [aiLoading, setAiLoading] = useState(false);
+            const [prompt, setPrompt] = useState("");
+            
+            // Auto-save on unmount or close is tricky in a modal, so we save on every change
+            useEffect(() => {
+                const timer = setTimeout(() => {
+                    if(localNote.title !== note.title || localNote.content !== note.content) {
+                        onSave(localNote);
+                    }
+                }, 500);
+                return () => clearTimeout(timer);
+            }, [localNote]);
+
+            const handleChange = (field, value) => {
+                setLocalNote(prev => ({ ...prev, [field]: value, timestamp: Date.now() }));
+            };
+
+            // AI Logic
+            const callAI = async (customPrompt = null, isRefine = false) => {
+                if (!customPrompt && !prompt.trim()) return;
+                
+                setAiLoading(true);
+                const userMsg = customPrompt || prompt;
+                
+                // Construct Messages
+                // We provide the current note content as context
+                const systemContext = `You are a helpful AI assistant inside a note-taking app. 
+                Current Note Context: 
+                Title: ${localNote.title}
+                Content: ${localNote.content}
+                
+                If the user asks to "Refine" or "Fix", provide the rewritten content directly. 
+                If chatting, answer their question based on the note or general knowledge.`;
+
+                const messages = [
+                    { role: "system", content: systemContext },
+                    ...(localNote.chatHistory || []),
+                    { role: "user", content: userMsg }
+                ];
+
+                try {
+                    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${API_KEY}`,
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": window.location.href, 
+                            "X-Title": "Material AI Notes"
+                        },
+                        body: JSON.stringify({
+                            model: AI_MODEL, 
+                            messages: messages,
+                            reasoning: { enabled: true } // Specifically requested parameter
+                        })
+                    });
+
+                    const data = await response.json();
+                    
+                    if(data.error) throw new Error(data.error.message);
+
+                    const aiResponse = data.choices[0].message;
+                    const reasoning = data.choices[0].reasoning_details || null; // Capture reasoning if available
+
+                    // Update History
+                    const newHistory = [
+                        ...(localNote.chatHistory || []),
+                        { role: "user", content: userMsg },
+                        { 
+                            role: "assistant", 
+                            content: aiResponse.content, 
+                            reasoning_details: reasoning // Store reasoning
+                        }
+                    ];
+
+                    handleChange('chatHistory', newHistory);
+                    
+                    // If Refine, update content directly (basic heuristic)
+                    if (isRefine) {
+                        handleChange('content', aiResponse.content);
+                        setIsAiOpen(false); // Close chat if just refining
+                    } else {
+                        setPrompt("");
+                    }
+
+                } catch (err) {
+                    alert("AI Error: " + err.message);
+                } finally {
+                    setAiLoading(false);
+                }
+            };
+
+            const scrollToBottom = useRef(null);
+            useEffect(() => {
+                if (scrollToBottom.current) scrollToBottom.current.scrollIntoView({ behavior: "smooth" });
+            }, [localNote.chatHistory, isAiOpen]);
+
+            return (
+                <div className="fixed inset-0 z-50 bg-md-base flex flex-col animate-[slideUp_0.3s_ease-out]">
+                    
+                    {/* Top Bar */}
+                    <div className="flex items-center justify-between p-4 bg-md-surfaceVariant/50">
+                        <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5">
+                            <Icon name="arrow-left" />
+                        </button>
+                        <div className="flex gap-2">
+                             <select 
+                                value={localNote.category}
+                                onChange={(e) => handleChange('category', e.target.value)}
+                                className="bg-transparent text-sm font-medium text-gray-600 focus:outline-none cursor-pointer"
+                            >
+                                <option value="Personal">Personal</option>
+                                <option value="Study">Study</option>
+                                <option value="Ideas">Ideas</option>
+                            </select>
+                            <button onClick={onDelete} className="p-2 text-md-error rounded-full hover:bg-md-error/10">
+                                <Icon name="trash-2" size={20} />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Content Area */}
+                    <div className="flex-1 overflow-y-auto p-6">
+                        <input
+                            type="text"
+                            placeholder="Title"
+                            value={localNote.title}
+                            onChange={(e) => handleChange('title', e.target.value)}
+                            className="w-full text-3xl font-bold bg-transparent border-none focus:outline-none placeholder-gray-400 mb-4 text-gray-800"
+                        />
+                        <textarea
+                            placeholder="Start typing..."
+                            value={localNote.content}
+                            onChange={(e) => handleChange('content', e.target.value)}
+                            className="w-full h-[calc(100%-4rem)] bg-transparent border-none focus:outline-none text-lg leading-relaxed text-gray-700 resize-none"
+                        ></textarea>
+                    </div>
+
+                    {/* AI Toolbar */}
+                    <div className={`bg-md-surface border-t border-md-outline/10 transition-all duration-300 ease-in-out ${isAiOpen ? 'h-3/5 rounded-t-3xl shadow-2xl' : 'h-16'}`}>
+                        
+                        {/* Collapsed View */}
+                        {!isAiOpen && (
+                            <div className="h-full flex items-center justify-between px-4">
+                                <button 
+                                    onClick={() => callAI("Improve the grammar and clarity of the current note content drastically, keeping the same meaning.", true)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-md-primaryContainer text-md-onPrimaryContainer rounded-full text-sm font-medium hover:brightness-95 transition"
+                                    disabled={aiLoading}
+                                >
+                                    {aiLoading ? <Icon name="loader-2" className="animate-spin" size={16}/> : <Icon name="sparkles" size={16}/>}
+                                    AI Refine
+                                </button>
+                                <button 
+                                    onClick={() => setIsAiOpen(true)}
+                                    className="p-3 bg-md-secondaryContainer text-md-onSecondaryContainer rounded-full"
+                                >
+                                    <Icon name="message-circle" size={24} />
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Expanded Chat View */}
+                        {isAiOpen && (
+                            <div className="flex flex-col h-full">
+                                <div className="flex justify-between items-center p-4 border-b border-gray-100">
+                                    <h3 className="font-bold text-md-primary flex items-center gap-2">
+                                        <Icon name="bot" size={20} /> AI Assistant
+                                    </h3>
+                                    <button onClick={() => setIsAiOpen(false)} className="p-1 rounded-full bg-gray-100">
+                                        <Icon name="x" size={20} />
+                                    </button>
+                                </div>
+
+                                {/* Chat History */}
+                                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
+                                    {(localNote.chatHistory || []).map((msg, idx) => (
+                                        <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                            <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${msg.role === 'user' ? 'bg-md-primary text-white rounded-br-none' : 'bg-white border border-gray-200 rounded-bl-none text-gray-800'}`}>
+                                                {msg.content}
+                                            </div>
+                                            {/* Reasoning Dropdown */}
+                                            {msg.reasoning_details && (
+                                                <details className="mt-1 text-xs text-gray-500 max-w-[85%]">
+                                                    <summary className="cursor-pointer hover:text-md-primary list-none flex items-center gap-1">
+                                                        <Icon name="brain-circuit" size={12} /> Show Reasoning
+                                                    </summary>
+                                                    <div className="p-2 bg-gray-100 rounded mt-1 whitespace-pre-wrap font-mono text-[10px] leading-tight text-gray-600">
+                                                        {msg.reasoning_details}
+                                                    </div>
+                                                </details>
+                                            )}
+                                        </div>
+                                    ))}
+                                    {aiLoading && (
+                                        <div className="flex items-center gap-2 text-gray-400 text-sm pl-2">
+                                            <Icon name="loader-2" className="animate-spin" size={16} /> Thinking...
+                                        </div>
+                                    )}
+                                    <div ref={scrollToBottom}></div>
+                                </div>
+
+                                {/* Input Area */}
+                                <div className="p-3 flex gap-2 bg-white">
+                                    <input 
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && callAI()}
+                                        placeholder="Ask AI about your note..."
+                                        className="flex-1 bg-gray-100 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-md-primary/50 text-sm"
+                                    />
+                                    <button 
+                                        onClick={() => callAI()}
+                                        disabled={aiLoading}
+                                        className="p-2 bg-md-primary text-white rounded-full disabled:opacity-50"
+                                    >
+                                        <Icon name="send" size={20} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
